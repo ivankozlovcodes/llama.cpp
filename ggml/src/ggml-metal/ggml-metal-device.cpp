@@ -589,7 +589,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_dsv4_hc(ggml_met
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv(
-        ggml_metal_library_t lib, const ggml_tensor * op, int32_t nc, bool use_silu) {
+        ggml_metal_library_t lib, const ggml_tensor * op, int32_t nc, bool use_silu, bool use_res) {
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
 
@@ -606,13 +606,14 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv(
     }
 
     snprintf(base, 256, "kernel_ssm_conv_%s_%s%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), suffix);
-    snprintf(name, 256, "%s_nc=%d_silu=%d", base, nc, use_silu ? 1 : 0);
+    snprintf(name, 256, "%s_nc=%d_silu=%d_res=%d", base, nc, use_silu ? 1 : 0, use_res ? 1 : 0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
         ggml_metal_cv_set_bool(cv, use_silu, FC_SSM_CONV + 1);
         ggml_metal_cv_set_int32(cv, nc,      FC_SSM_CONV + 2);
+        ggml_metal_cv_set_bool(cv, use_res,  FC_SSM_CONV + 3);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 

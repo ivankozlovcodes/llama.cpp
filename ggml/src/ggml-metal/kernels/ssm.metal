@@ -2,6 +2,7 @@
 
 constant bool FC_ssm_conv_silu [[function_constant(FC_SSM_CONV + 1)]];
 constant int  FC_ssm_conv_nc    [[function_constant(FC_SSM_CONV + 2)]];
+constant bool FC_ssm_conv_res   [[function_constant(FC_SSM_CONV + 3)]];
 
 // ref: ggml.c:ggml_compute_forward_ssm_conv_f32
 kernel void kernel_ssm_conv_f32_f32(
@@ -9,6 +10,7 @@ kernel void kernel_ssm_conv_f32_f32(
         device const  void * src0,
         device const  void * src1,
         device       float * dst,
+        device const  char * res,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]]) {
@@ -32,7 +34,11 @@ kernel void kernel_ssm_conv_f32_f32(
         sumf += s[i0] * c[i0];
     }
 
-    x[0] = FC_ssm_conv_silu ? sumf/(1.0f + exp(-sumf)) : sumf;
+    float v = FC_ssm_conv_silu ? sumf/(1.0f + exp(-sumf)) : sumf;
+    if (FC_ssm_conv_res) {
+        v = (v + *((device const float *) (res + ir*args.res_nb0 + (i2 + i3*args.ne1)*args.res_nb1)))*args.res_s + args.res_b;
+    }
+    x[0] = v;
 }
 
 kernel void kernel_ssm_conv_f32_f32_4(
@@ -40,6 +46,7 @@ kernel void kernel_ssm_conv_f32_f32_4(
         device const  void * src0,
         device const  void * src1,
         device       float * dst,
+        device const  char * res,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]]) {
@@ -63,7 +70,11 @@ kernel void kernel_ssm_conv_f32_f32_4(
         sumf += dot(s[i0], c[i0]);
     }
 
-    x[0] = FC_ssm_conv_silu ? sumf/(1.0f + exp(-sumf)) : sumf;
+    float v = FC_ssm_conv_silu ? sumf/(1.0f + exp(-sumf)) : sumf;
+    if (FC_ssm_conv_res) {
+        v = (v + *((device const float *) (res + ir*args.res_nb0 + (i2 + i3*args.ne1)*args.res_nb1)))*args.res_s + args.res_b;
+    }
+    x[0] = v;
 }
 
 constant short FC_ssm_conv_bs   [[function_constant(FC_SSM_CONV + 0)]];

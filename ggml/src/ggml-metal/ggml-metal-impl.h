@@ -983,6 +983,10 @@ typedef struct {
     uint64_t nb0;
     uint64_t nb1;
     uint64_t nb2;
+    float    res_s;
+    float    res_b;
+    uint64_t res_nb0;
+    uint64_t res_nb1;
 } ggml_metal_kargs_ssm_conv;
 
 typedef struct {

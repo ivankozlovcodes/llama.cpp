@@ -473,6 +473,65 @@ static bool ggml_metal_fusion_check_ctrl_gate(
     return ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, 6, fusion->ops.data(), &out_idx, 1);
 }
 
+// SSM_CONV + (RESHAPE) + ADD + SCALE: dst = (conv(x) + r)*s + b, single-token decode only
+static bool ggml_metal_fusion_check_ssm_conv_res(
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
+    static const bool disabled = getenv("GGML_METAL_NO_CONV_FUSE") != nullptr;
+    if (disabled) {
+        return false;
+    }
+
+    const ggml_tensor * conv = nodes[0];
+    const ggml_tensor * add  = nodes[1];
+    const ggml_tensor * sc   = nodes[2];
+
+    if (sc->src[0] != add) {
+        return false;
+    }
+    // one ADD operand is the conv output (directly or through a view), the other is the residual
+    auto is_conv = [&](const ggml_tensor * t) { return t == conv || (t && t->view_src == conv); };
+    const ggml_tensor * cv = is_conv(add->src[0]) ? add->src[0] : (is_conv(add->src[1]) ? add->src[1] : nullptr);
+    if (!cv) {
+        return false;
+    }
+    const ggml_tensor * res = cv == add->src[0] ? add->src[1] : add->src[0];
+
+    if (conv->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 || sc->type != GGML_TYPE_F32 || res->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_are_same_shape(cv, add) || !ggml_are_same_shape(res, add) || !ggml_are_same_shape(sc, add) ||
+        !ggml_is_contiguous(conv) || !ggml_is_contiguous(add) || !ggml_is_contiguous(sc) || add->ne[2] != 1 || add->ne[3] != 1) {
+        return false;
+    }
+    // the epilogue only exists in the single-token kernels
+    if (mode == GGML_METAL_FUSION_FULL && conv->ne[1] != 1) {
+        return false;
+    }
+
+    // the raw graph range must be exactly SSM_CONV, RESHAPE, ADD, SCALE (the view included), then check uses on it
+    const int n_ops     = (int) fusion->ops.size();
+    const int raw_start = node_idxs[idx];
+    const int raw_end   = node_idxs[idx + n_ops - 1];
+    const int raw_count = raw_end - raw_start + 1;
+    if (raw_count != (int) fusion->ops_all.size()) {
+        return false;
+    }
+    int raw_idxs[GGML_METAL_FUSION_MAX];
+    for (int i = 0; i < raw_count; ++i) {
+        raw_idxs[i] = raw_start + i;
+        if (gf->nodes[raw_start + i]->op != fusion->ops_all[i]) {
+            return false;
+        }
+    }
+    const int out_idx = raw_end;
+    return ggml_can_fuse_subgraph_ext(gf, raw_idxs, raw_count, fusion->ops_all.data(), &out_idx, 1);
+}
+
 #define GGML_METAL_TOPK_MOE_MAX_EXPERTS 1024
 
 static const std::vector<ggml_op> ops_topk_moe = {
@@ -966,6 +1025,7 @@ static const std::vector<ggml_op> ops_ctrl_gate = { GGML_OP_UNARY, GGML_OP_UNARY
 static const std::vector<ggml_op> ops_gdn_cache = { GGML_OP_GATED_DELTA_NET, GGML_OP_CPY };
 
 static const std::vector<ggml_op> ops_ssm_conv_silu = { GGML_OP_SSM_CONV, GGML_OP_UNARY };
+static const std::vector<ggml_op> ops_ssm_conv_res  = { GGML_OP_SSM_CONV, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_SCALE };
 
 static const std::vector<ggml_op> ops_moe_reduce_2 = {
     GGML_OP_MUL, GGML_OP_VIEW, GGML_OP_VIEW, GGML_OP_ADD
@@ -1048,6 +1108,7 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_8, {}, true, ggml_metal_fusion_check_moe_reduce },
 
     { GGML_METAL_FUSION_SSM_CONV_SILU, ops_ssm_conv_silu, {}, false, ggml_metal_fusion_check_ssm_conv_silu },
+    { GGML_METAL_FUSION_SSM_CONV_RES,  ops_ssm_conv_res,  {}, true,  ggml_metal_fusion_check_ssm_conv_res  },
 
     { GGML_METAL_FUSION_MUL_MAT_ADD, ops_mul_mat_add, {}, false, ggml_metal_fusion_check_mul_mat_add },
 };
