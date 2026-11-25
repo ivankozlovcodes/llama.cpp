@@ -704,7 +704,7 @@ ggml_backend_t ggml_backend_metal_init(void) {
         /* .context   = */ ctx,
     };
 
-    ggml_backend_metal_set_n_cb(backend, 1);
+    ggml_backend_metal_set_n_cb(backend, getenv("GGML_METAL_N_CB") ? atoi(getenv("GGML_METAL_N_CB")) : 1);
 
     return backend;
 }
@@ -799,7 +799,7 @@ static ggml_backend_t ggml_backend_metal_device_init_backend(ggml_backend_dev_t 
         /* .context   = */ ctx,
     };
 
-    ggml_backend_metal_set_n_cb(backend, 1);
+    ggml_backend_metal_set_n_cb(backend, getenv("GGML_METAL_N_CB") ? atoi(getenv("GGML_METAL_N_CB")) : 1);
 
     return backend;
 

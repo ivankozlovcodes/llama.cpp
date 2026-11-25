@@ -511,6 +511,61 @@ typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;
 
 template [[host_name("kernel_count_equal_i32")]] kernel kernel_count_equal_t kernel_count_equal<int32_t>;
 
+kernel void kernel_clip_norm_f32(
+        constant ggml_metal_kargs_clip_norm & args,
+        device const float * x,
+        device const float * limit,
+        device       float * dst,
+        device const float * sv,
+        uint   tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    const int row = tgpig;
+    if (row >= args.nrows) {
+        return;
+    }
+    device const float * xr = x   + (int64_t) row*args.ne00;
+    device       float * dr = dst + (int64_t) row*args.ne00;
+    device const float * sr = sv  + (int64_t) (args.s_ne1 == 1 ? 0 : row % args.ne01)*args.ne00;
+
+    float s = 0.0f;
+    for (int i = tiisg; i < args.ne00; i += 32) {
+        const float v = args.has_scale ? xr[i]*sr[i] : xr[i];
+        s += v*v;
+    }
+    s = simd_sum(s);
+
+    const float norm = sqrt(s)*args.scale + args.bias;
+    const float f    = clamp(limit[row]/norm, args.cmin, args.cmax);
+
+    for (int i = tiisg; i < args.ne00; i += 32) {
+        const float v = args.has_scale ? xr[i]*sr[i] : xr[i];
+        dr[i] = v*f;
+    }
+}
+
+kernel void kernel_ctrl_gate_f32(
+        constant ggml_metal_kargs_ctrl_gate & args,
+        device const char * c,
+        device const char * m,
+        device const char * f,
+        device const char * g,
+        device       char * dst,
+        uint   tgpig [[threadgroup_position_in_grid]],
+        ushort tpitg [[thread_position_in_threadgroup]],
+        ushort ntg   [[threads_per_threadgroup]]) {
+    const int row = tgpig;
+    device const float * cr = (device const float *) (c + row*args.nb1_c);
+    device const float * mr = (device const float *) (m + row*args.nb1_m);
+    device const float * fr = (device const float *) (f + row*args.nb1_f);
+    device const float * gr = (device const float *) (g + row*args.nb1_g);
+    device       float * dr = (device       float *) (dst + row*args.nb1_d);
+    for (int i = tpitg; i < args.ne0; i += ntg) {
+        const float ci = cr[i];
+        // same evaluation as the unfused graph: (c - tanh(f)*c) + tanh(g)*m
+        dr[i] = (ci - precise::tanh(fr[i])*ci) + precise::tanh(gr[i])*mr[i];
+    }
+}
+
 template <typename T>
 kernel void kernel_snake(
         constant ggml_metal_kargs_snake & args,
